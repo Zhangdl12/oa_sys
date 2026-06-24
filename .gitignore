@@ -23,4 +23,11 @@ AGENTS.md
 .env.shared
 progress.md
 .gitgnore
-
+需求.txt
+生成哈希密码.py
+Dockerfile
+docker-compose.yml
+.dockerignore
+docs/
+README.md
+celerybeat-schedule

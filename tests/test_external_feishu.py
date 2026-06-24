@@ -10,26 +10,26 @@ from fastapi.testclient import TestClient
 from services.oa_admin.apps.auth.constants import RBAC_USER_KEY_TEMPLATE
 from services.oa_admin.apps.auth.deps.auth_deps import login_check
 from services.oa_admin.apps.auth.models.auth import CurrentUser
-from services.oa_admin.apps.external.deps.external_deps import (
+from services.oa_admin.apps.external.feishu.deps.feishu_deps import (
     get_feishu_management,
     get_notification_management,
 )
-from services.oa_admin.apps.external.managements.feishu_management import FeishuManagement
-from services.oa_admin.apps.external.managements.notification_management import (
+from services.oa_admin.apps.external.feishu.managements.feishu_management import FeishuManagement
+from services.oa_admin.apps.external.feishu.managements.notification_management import (
     NotificationManagement,
 )
-from services.oa_admin.apps.external.managements.notify_log_management import (
+from services.oa_admin.apps.external.feishu.managements.notify_log_management import (
     ExternalNotifyLogManagement,
 )
-from services.oa_admin.apps.external.models.feishu import (
+from services.oa_admin.apps.external.feishu.models.feishu import (
     FeishuCardNotifyRequest,
     FeishuNotifyRequest,
 )
-from services.oa_admin.apps.external.models.notification import (
+from services.oa_admin.apps.external.feishu.models.notification import (
     CardNotificationRequest,
     TextNotificationRequest,
 )
-from services.oa_admin.apps.external.models.notify_log import ExternalNotifyLogListQuery
+from services.oa_admin.apps.external.feishu.models.notify_log import ExternalNotifyLogListQuery
 from services.oa_admin.core.config import Settings, get_settings
 from services.oa_admin.db.mysql import get_mysql_pool
 from services.oa_admin.db.redis import get_redis_client

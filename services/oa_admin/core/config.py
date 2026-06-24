@@ -55,10 +55,15 @@ class Settings(BaseSettings):
     http_max_connections: int = 100
     http_max_keepalive_connections: int = 20
 
+    celery_broker_url: str = "redis://127.0.0.1:6379/1"
+    celery_result_backend: str = "redis://127.0.0.1:6379/2"
+
     feishu_enabled: bool = False
     feishu_base_url: str = "https://open.feishu.cn"
     feishu_app_id: str = ""
     feishu_app_secret: str = ""
+    feishu_hourly_notify_enabled: bool = False
+    feishu_hourly_notify_user_id: str = ""
     user_create_notify_enabled: bool = False
     user_create_notify_receive_id_type: Literal["open_id", "chat_id", "user_id"] = "user_id"
     user_create_notify_receive_id: str = ""

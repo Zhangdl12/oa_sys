@@ -1,10 +1,10 @@
 from loguru import logger
 
 from services.oa_admin.apps.auth.models.auth import CurrentUser
-from services.oa_admin.apps.external.managements.notification_management import (
+from services.oa_admin.apps.external.feishu.managements.notification_management import (
     NotificationManagement,
 )
-from services.oa_admin.apps.external.models.notification import CardNotificationRequest
+from services.oa_admin.apps.external.feishu.models.notification import CardNotificationRequest
 from services.oa_admin.core.config import Settings
 
 

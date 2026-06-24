@@ -83,9 +83,9 @@ class FakeCursor:
             用户字典或 None。
         """
 
-        if "WHERE username" in self.sql:
+        if "WHERE username" in self.sql or "WHERE u.username" in self.sql:
             return self.pool.users_by_username.get(str(self.params[0]))
-        if "WHERE id" in self.sql:
+        if "WHERE id" in self.sql or "WHERE u.id" in self.sql:
             return self.pool.users_by_id.get(int(self.params[0]))
         return None
 

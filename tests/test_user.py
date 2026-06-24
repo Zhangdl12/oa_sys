@@ -9,8 +9,8 @@ from fastapi.testclient import TestClient
 from services.oa_admin.apps.auth.constants import LOGIN_USER_KEY_PATTERN, RBAC_USER_KEY_TEMPLATE
 from services.oa_admin.apps.auth.managements.auth_management import AuthManagement
 from services.oa_admin.apps.auth.models.auth import LoginRequest
-from services.oa_admin.apps.external.deps.external_deps import get_notification_management
-from services.oa_admin.apps.external.models.notification import (
+from services.oa_admin.apps.external.feishu.deps.feishu_deps import get_notification_management
+from services.oa_admin.apps.external.feishu.models.notification import (
     CardNotificationRequest,
     TextNotificationRequest,
 )

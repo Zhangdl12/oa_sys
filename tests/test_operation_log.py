@@ -147,9 +147,11 @@ class FakeCursor:
             return {"total": len(self.pool.operation_logs_by_id)}
         if "FROM sys_operation_log" in self.sql and "WHERE id" in self.sql:
             return self.pool.operation_logs_by_id.get(int(self.params[0]))
-        if "WHERE username" in self.sql:
+        if "WHERE username" in self.sql or "WHERE u.username" in self.sql:
             return self.pool.users_by_username.get(str(self.params[0]))
-        if "FROM sys_user" in self.sql and "WHERE id" in self.sql:
+        if "FROM sys_user" in self.sql and (
+            "WHERE id" in self.sql or "WHERE u.id" in self.sql
+        ):
             return self.pool.users_by_id.get(int(self.params[0]))
         if "FROM sys_role" in self.sql and "WHERE id" in self.sql:
             return self.pool.roles_by_id.get(int(self.params[0]))

@@ -2,8 +2,8 @@ from typing import Annotated, Any
 
 from fastapi import Depends
 
-from services.oa_admin.apps.external.deps.external_deps import get_notification_management
-from services.oa_admin.apps.external.managements.notification_management import (
+from services.oa_admin.apps.external.feishu.deps.feishu_deps import get_notification_management
+from services.oa_admin.apps.external.feishu.managements.notification_management import (
     NotificationManagement,
 )
 from services.oa_admin.apps.role.managements.role_management import RoleManagement
