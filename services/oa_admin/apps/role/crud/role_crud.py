@@ -219,6 +219,24 @@ async def list_enabled_permission_ids_by_ids(
             return [int(row["id"]) for row in rows]
 
 
+async def list_permissions_by_role_id(mysql_pool: Any, role_id: int) -> list[dict[str, Any]]:
+    """按角色 ID 查询当前分配的权限明细。"""
+
+    sql = """
+    SELECT p.id,
+           p.perm_code,
+           p.perm_name
+    FROM sys_role_permission rp
+    INNER JOIN sys_permission p ON p.id = rp.permission_id
+    WHERE rp.role_id = %s
+    ORDER BY p.sort ASC, p.id ASC
+    """
+    async with mysql_pool.acquire() as conn:
+        async with conn.cursor() as cursor:
+            await cursor.execute(sql, (role_id,))
+            return await cursor.fetchall()
+
+
 async def replace_role_permissions(
     mysql_pool: Any,
     role_id: int,

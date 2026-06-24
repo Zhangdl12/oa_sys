@@ -8,6 +8,7 @@ from services.oa_admin.apps.role.crud.role_crud import (
     get_role_by_id,
     insert_role,
     list_enabled_permission_ids_by_ids,
+    list_permissions_by_role_id,
     list_roles,
     list_user_ids_by_role_id,
     replace_role_permissions,
@@ -70,6 +71,27 @@ class RoleManagement:
         role_id = await insert_role(self.mysql_pool, payload.model_dump())
         role = await get_role_by_id(self.mysql_pool, role_id)
         return RoleInfo.model_validate(role).model_dump()
+
+    async def get_role(self, role_id: int) -> dict[str, Any]:
+        """查询单个角色。"""
+
+        role = await get_role_by_id(self.mysql_pool, role_id)
+        if not role:
+            raise BusinessException(code=40400, msg="角色不存在")
+        return RoleInfo.model_validate(role).model_dump()
+
+    async def list_role_permissions(self, role_id: int) -> list[dict[str, Any]]:
+        """查询角色当前权限明细。"""
+
+        rows = await list_permissions_by_role_id(self.mysql_pool, role_id)
+        return [
+            {
+                "id": int(row["id"]),
+                "perm_code": str(row["perm_code"]),
+                "perm_name": str(row.get("perm_name") or ""),
+            }
+            for row in rows
+        ]
 
     async def update_role(self, role_id: int, payload: RoleUpdateRequest) -> dict[str, Any]:
         """更新角色。

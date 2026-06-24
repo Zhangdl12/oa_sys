@@ -65,10 +65,13 @@ class Settings(BaseSettings):
     permission_notify_enabled: bool = False
     permission_notify_receive_id_type: Literal["open_id", "chat_id", "user_id"] = "user_id"
     permission_notify_receive_id: str = ""
+    role_notify_enabled: bool = False
+    role_notify_receive_id_type: Literal["open_id", "chat_id", "user_id"] = "user_id"
+    role_notify_receive_id: str = ""
 
-    jwt_secret_key: str = "change-me-in-real-env"
+    jwt_secret_key: str = "LP4rKBCuD8aC9u6dhd2yoKE2cV5mFQ2-21MpjyBEKGmUFZa7vPGJFJcA13zrCJVqNIyCVuLYxO_ny75-3RW41g"
     jwt_algorithm: str = "HS256"
-    jwt_access_token_expire_minutes: int = 120
+    jwt_access_token_expire_minutes: int = 480
 
 
 @lru_cache # 缓存配置对象

@@ -2,13 +2,18 @@ import asyncio
 from typing import Any
 
 import pytest
-from common.exceptions import BusinessException
+from common.exceptions import BusinessException, FeishuException
 from common.security import hash_password
 from fastapi.testclient import TestClient
 
 from services.oa_admin.apps.auth.constants import RBAC_USER_KEY_TEMPLATE
 from services.oa_admin.apps.auth.managements.auth_management import AuthManagement
 from services.oa_admin.apps.auth.models.auth import LoginRequest
+from services.oa_admin.apps.external.deps.external_deps import get_notification_management
+from services.oa_admin.apps.external.models.notification import (
+    CardNotificationRequest,
+    TextNotificationRequest,
+)
 from services.oa_admin.apps.role.managements.role_management import RoleManagement
 from services.oa_admin.apps.role.models.role import (
     RoleAssignPermissionRequest,
@@ -126,9 +131,9 @@ class FakeCursor:
             数据字典或 None。
         """
 
-        if "WHERE username" in self.sql:
+        if "WHERE username" in self.sql or "WHERE u.username" in self.sql:
             return self.pool.users_by_username.get(str(self.params[0]))
-        if "FROM sys_user" in self.sql and "WHERE id" in self.sql:
+        if "FROM sys_user" in self.sql and ("WHERE id" in self.sql or "WHERE u.id" in self.sql):
             return self.pool.users_by_id.get(int(self.params[0]))
         if "FROM sys_role" in self.sql and "WHERE id" in self.sql:
             return self.pool.roles_by_id.get(int(self.params[0]))
@@ -157,6 +162,18 @@ class FakeCursor:
                 {"perm_code": self.pool.permissions_by_id[permission_id]["perm_code"]}
                 for permission_id in permission_ids
                 if self.pool.permissions_by_id.get(permission_id, {}).get("status") == 1
+            ]
+        if "FROM sys_role_permission rp" in self.sql:
+            role_id = int(self.params[0])
+            permission_ids = self.pool.role_permissions_by_role.get(role_id, [])
+            return [
+                {
+                    "id": permission_id,
+                    "perm_code": self.pool.permissions_by_id[permission_id]["perm_code"],
+                    "perm_name": self.pool.permissions_by_id[permission_id]["perm_name"],
+                }
+                for permission_id in permission_ids
+                if permission_id in self.pool.permissions_by_id
             ]
         if "FROM sys_role" in self.sql:
             return sorted(self.pool.roles_by_id.values(), key=lambda item: int(item["id"]))
@@ -342,6 +359,43 @@ class FakeRedis:
         return count
 
 
+class StubNotificationManagement:
+    """角色通知测试桩。"""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.payloads: list[TextNotificationRequest] = []
+        self.card_payloads: list[CardNotificationRequest] = []
+        self.sender_user_ids: list[int | None] = []
+        self.request_ids: list[str] = []
+
+    async def send_text_notification(
+        self,
+        payload: TextNotificationRequest,
+        sender_user_id: int | None = None,
+        request_id: str = "",
+    ) -> dict[str, Any]:
+        self.payloads.append(payload)
+        self.sender_user_ids.append(sender_user_id)
+        self.request_ids.append(request_id)
+        if self.error is not None:
+            raise self.error
+        return {"message_id": "om_role_text"}
+
+    async def send_card_notification(
+        self,
+        payload: CardNotificationRequest,
+        sender_user_id: int | None = None,
+        request_id: str = "",
+    ) -> dict[str, Any]:
+        self.card_payloads.append(payload)
+        self.sender_user_ids.append(sender_user_id)
+        self.request_ids.append(request_id)
+        if self.error is not None:
+            raise self.error
+        return {"message_id": "om_role_card"}
+
+
 def build_settings() -> Settings:
     """创建测试配置。
 
@@ -353,7 +407,12 @@ def build_settings() -> Settings:
         Settings 配置对象。
     """
 
-    return Settings(jwt_secret_key="test-secret", jwt_access_token_expire_minutes=60)
+    return Settings(
+        jwt_secret_key="test-secret",
+        jwt_access_token_expire_minutes=60,
+        role_notify_enabled=False,
+        role_notify_receive_id="",
+    )
 
 
 def build_user(user_id: int = 1, role_id: int = 1) -> dict[str, Any]:
@@ -412,6 +471,7 @@ def build_role(
 def build_permission(
     permission_id: int,
     perm_code: str,
+    perm_name: str = "",
     status: int = 1,
 ) -> dict[str, Any]:
     """创建测试权限点。
@@ -421,12 +481,18 @@ def build_permission(
     参数：
         permission_id：权限点 ID。
         perm_code：权限编码。
+        perm_name：权限名称。
         status：权限状态。
     返回值：
         权限点字典。
     """
 
-    return {"id": permission_id, "perm_code": perm_code, "status": status}
+    return {
+        "id": permission_id,
+        "perm_code": perm_code,
+        "perm_name": perm_name or perm_code,
+        "status": status,
+    }
 
 
 def test_list_roles_success() -> None:
@@ -538,6 +604,30 @@ def test_assign_permissions_replaces_old_permissions() -> None:
     run_async(scenario())
 
 
+def test_list_role_permissions_success() -> None:
+    async def scenario() -> None:
+        manager = RoleManagement(
+            FakePool(
+                roles=[build_role(role_id=2, role_code="staff")],
+                permissions=[
+                    build_permission(10, "role:list", "查询角色"),
+                    build_permission(11, "role:create", "创建角色"),
+                ],
+                role_permissions_by_role={2: [10, 11]},
+            ),
+            FakeRedis(),
+        )
+
+        result = await manager.list_role_permissions(2)
+
+        assert result == [
+            {"id": 10, "perm_code": "role:list", "perm_name": "查询角色"},
+            {"id": 11, "perm_code": "role:create", "perm_name": "创建角色"},
+        ]
+
+    run_async(scenario())
+
+
 def test_assign_permissions_rejects_missing_or_disabled_permission() -> None:
     async def scenario() -> None:
         manager = RoleManagement(
@@ -601,9 +691,11 @@ def test_role_create_api_returns_unified_response() -> None:
     settings, mysql_pool, redis_client, token = run_async(
         prepare_api_context(["role:create"], roles=[build_role()])
     )
+    notification_management = StubNotificationManagement()
     app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
     app.dependency_overrides[get_redis_client] = lambda: redis_client
     app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
     try:
         with TestClient(app) as client:
             response = client.post(
@@ -618,6 +710,111 @@ def test_role_create_api_returns_unified_response() -> None:
     assert response.json()["code"] == 0
     assert response.json()["msg"] == "成功"
     assert response.json()["data"]["role_code"] == "staff"
+    assert notification_management.card_payloads == []
+
+
+def test_role_create_api_sends_notification_when_enabled() -> None:
+    settings, mysql_pool, redis_client, token = run_async(
+        prepare_api_context(["role:create"], roles=[build_role()])
+    )
+    settings.role_notify_enabled = True
+    settings.role_notify_receive_id_type = "chat_id"
+    settings.role_notify_receive_id = "oc_role"
+    notification_management = StubNotificationManagement()
+    app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
+    app.dependency_overrides[get_redis_client] = lambda: redis_client
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/roles",
+                headers={"Authorization": f"Bearer {token}", "X-Request-ID": "req-create-role"},
+                json={
+                    "role_code": "staff",
+                    "role_name": "员工",
+                    "status": 1,
+                    "remark": "业务角色",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert notification_management.payloads == []
+    assert notification_management.card_payloads[0].receive_id_type == "chat_id"
+    assert notification_management.card_payloads[0].receive_id == "oc_role"
+    assert notification_management.card_payloads[0].content_summary == "角色 staff 创建成功"
+    card = notification_management.card_payloads[0].card
+    content = card["body"]["elements"][1]["content"]
+    assert card["schema"] == "2.0"
+    assert card["header"]["title"]["content"] == "角色创建成功"
+    assert card["body"]["elements"][0]["element_id"] == "role_create_success_tip"
+    assert card["body"]["elements"][1]["element_id"] == "role_create_detail"
+    assert "角色 **员工** （staff）已成功创建" in content
+    assert f"角色ID：{response.json()['data']['id']}" in content
+    assert "状态：启用" in content
+    assert "备注：业务角色" in content
+    assert "操作人：admin" in content
+    assert "request_id：req-create-role" in content
+    assert notification_management.sender_user_ids[0] == 1
+    assert notification_management.request_ids[0] == "req-create-role"
+
+
+def test_role_create_api_skips_notification_without_receive_id() -> None:
+    settings, mysql_pool, redis_client, token = run_async(
+        prepare_api_context(["role:create"], roles=[build_role()])
+    )
+    settings.role_notify_enabled = True
+    settings.role_notify_receive_id = ""
+    notification_management = StubNotificationManagement()
+    app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
+    app.dependency_overrides[get_redis_client] = lambda: redis_client
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/roles",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"role_code": "staff", "role_name": "员工"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert notification_management.card_payloads == []
+
+
+def test_role_create_api_ignores_notification_failure() -> None:
+    settings, mysql_pool, redis_client, token = run_async(
+        prepare_api_context(["role:create"], roles=[build_role()])
+    )
+    settings.role_notify_enabled = True
+    settings.role_notify_receive_id = "oc_role"
+    notification_management = StubNotificationManagement(
+        error=FeishuException(msg="send failed")
+    )
+    app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
+    app.dependency_overrides[get_redis_client] = lambda: redis_client
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/roles",
+                headers={"Authorization": f"Bearer {token}", "X-Request-ID": "req-role-fail"},
+                json={"role_code": "staff", "role_name": "员工"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert response.json()["data"]["role_code"] == "staff"
+    assert notification_management.card_payloads[0].receive_id == "oc_role"
 
 
 def test_role_update_api_returns_unified_response() -> None:
@@ -628,9 +825,11 @@ def test_role_update_api_returns_unified_response() -> None:
             users=[build_user(role_id=1)],
         )
     )
+    notification_management = StubNotificationManagement()
     app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
     app.dependency_overrides[get_redis_client] = lambda: redis_client
     app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
     try:
         with TestClient(app) as client:
             response = client.put(
@@ -644,6 +843,152 @@ def test_role_update_api_returns_unified_response() -> None:
     assert response.status_code == 200
     assert response.json()["code"] == 0
     assert response.json()["data"]["status"] == 0
+    assert notification_management.card_payloads == []
+
+
+def test_role_update_api_sends_notification_when_enabled() -> None:
+    settings, mysql_pool, redis_client, token = run_async(
+        prepare_api_context(
+            ["role:update"],
+            roles=[build_role(role_id=2, role_code="staff", role_name="员工", remark="旧备注")],
+            users=[build_user(role_id=1)],
+        )
+    )
+    settings.role_notify_enabled = True
+    settings.role_notify_receive_id_type = "chat_id"
+    settings.role_notify_receive_id = "oc_role"
+    notification_management = StubNotificationManagement()
+    app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
+    app.dependency_overrides[get_redis_client] = lambda: redis_client
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
+    try:
+        with TestClient(app) as client:
+            response = client.put(
+                "/v1/roles/2",
+                headers={"Authorization": f"Bearer {token}", "X-Request-ID": "req-update-role"},
+                json={"role_name": "主管", "status": 0, "remark": "新备注"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert notification_management.payloads == []
+    assert notification_management.card_payloads[0].receive_id_type == "chat_id"
+    assert notification_management.card_payloads[0].receive_id == "oc_role"
+    assert (
+        notification_management.card_payloads[0].content_summary
+        == "角色 staff 更新成功，名称：员工 -> 主管；状态：启用 -> 禁用；备注：旧备注 -> 新备注"
+    )
+    card = notification_management.card_payloads[0].card
+    content = card["body"]["elements"][1]["content"]
+    assert card["schema"] == "2.0"
+    assert card["header"]["title"]["content"] == "角色更新成功"
+    assert card["header"]["template"] == "blue"
+    assert card["body"]["elements"][0]["element_id"] == "role_update_success_tip"
+    assert card["body"]["elements"][1]["element_id"] == "role_update_detail"
+    assert "角色 **主管** （staff）已成功更新" in content
+    assert "角色ID：2" in content
+    assert "状态：禁用" in content
+    assert "备注：新备注" in content
+    assert "操作人：admin" in content
+    assert "request_id：req-update-role" in content
+    assert "变更：名称：员工 -> 主管" in content
+    assert "状态：启用 -> 禁用" in content
+    assert "备注：旧备注 -> 新备注" in content
+    assert notification_management.sender_user_ids[0] == 1
+    assert notification_management.request_ids[0] == "req-update-role"
+
+
+def test_role_update_api_skips_notification_without_receive_id() -> None:
+    settings, mysql_pool, redis_client, token = run_async(
+        prepare_api_context(
+            ["role:update"],
+            roles=[build_role(role_id=2, role_code="staff")],
+            users=[build_user(role_id=1)],
+        )
+    )
+    settings.role_notify_enabled = True
+    settings.role_notify_receive_id = ""
+    notification_management = StubNotificationManagement()
+    app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
+    app.dependency_overrides[get_redis_client] = lambda: redis_client
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
+    try:
+        with TestClient(app) as client:
+            response = client.put(
+                "/v1/roles/2",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"role_name": "员工", "status": 0, "remark": "停用"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert notification_management.card_payloads == []
+
+
+def test_role_update_api_ignores_notification_failure() -> None:
+    settings, mysql_pool, redis_client, token = run_async(
+        prepare_api_context(
+            ["role:update"],
+            roles=[build_role(role_id=2, role_code="staff")],
+            users=[build_user(role_id=1)],
+        )
+    )
+    settings.role_notify_enabled = True
+    settings.role_notify_receive_id = "oc_role"
+    notification_management = StubNotificationManagement(
+        error=FeishuException(msg="send failed")
+    )
+    app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
+    app.dependency_overrides[get_redis_client] = lambda: redis_client
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
+    try:
+        with TestClient(app) as client:
+            response = client.put(
+                "/v1/roles/2",
+                headers={"Authorization": f"Bearer {token}", "X-Request-ID": "req-role-fail"},
+                json={"role_name": "员工", "status": 0, "remark": "停用"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert response.json()["data"]["status"] == 0
+    assert notification_management.card_payloads[0].receive_id == "oc_role"
+
+
+def test_role_update_api_does_not_notify_missing_role() -> None:
+    settings, mysql_pool, redis_client, token = run_async(
+        prepare_api_context(["role:update"], roles=[], users=[build_user(role_id=1)])
+    )
+    settings.role_notify_enabled = True
+    settings.role_notify_receive_id = "oc_role"
+    notification_management = StubNotificationManagement()
+    app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
+    app.dependency_overrides[get_redis_client] = lambda: redis_client
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
+    try:
+        with TestClient(app) as client:
+            response = client.put(
+                "/v1/roles/999",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"role_name": "员工", "status": 0, "remark": "停用"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 40400
+    assert response.json()["msg"] == "角色不存在"
+    assert notification_management.card_payloads == []
 
 
 def test_role_assign_permission_api_returns_unified_response() -> None:
@@ -654,9 +999,11 @@ def test_role_assign_permission_api_returns_unified_response() -> None:
             permissions=[build_permission(10, "role:list")],
         )
     )
+    notification_management = StubNotificationManagement()
     app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
     app.dependency_overrides[get_redis_client] = lambda: redis_client
     app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
     try:
         with TestClient(app) as client:
             response = client.put(
@@ -670,6 +1017,228 @@ def test_role_assign_permission_api_returns_unified_response() -> None:
     assert response.status_code == 200
     assert response.json()["code"] == 0
     assert response.json()["data"] == {"role_id": 2, "permission_ids": [10]}
+    assert notification_management.card_payloads == []
+
+
+def test_role_assign_permission_api_sends_notification_when_enabled() -> None:
+    settings, mysql_pool, redis_client, token = run_async(
+        prepare_api_context(
+            ["role:assign_permission"],
+            roles=[build_role(role_id=2, role_code="staff", role_name="员工")],
+            permissions=[
+                build_permission(10, "role:list", "查询角色"),
+                build_permission(11, "role:create", "创建角色"),
+            ],
+        )
+    )
+    mysql_pool.role_permissions_by_role[2] = [10]
+    settings.role_notify_enabled = True
+    settings.role_notify_receive_id_type = "chat_id"
+    settings.role_notify_receive_id = "oc_role"
+    notification_management = StubNotificationManagement()
+    app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
+    app.dependency_overrides[get_redis_client] = lambda: redis_client
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
+    try:
+        with TestClient(app) as client:
+            response = client.put(
+                "/v1/roles/2/permissions",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-Request-ID": "req-assign-permission",
+                },
+                json={"permission_ids": [10, 11, 11]},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert response.json()["data"] == {"role_id": 2, "permission_ids": [10, 11]}
+    assert notification_management.payloads == []
+    assert notification_management.card_payloads[0].receive_id_type == "chat_id"
+    assert notification_management.card_payloads[0].receive_id == "oc_role"
+    assert (
+        notification_management.card_payloads[0].content_summary
+        == "角色 staff 权限分配成功，新增：创建角色（role:create）"
+    )
+    card = notification_management.card_payloads[0].card
+    content = card["body"]["elements"][1]["content"]
+    assert card["schema"] == "2.0"
+    assert card["header"]["title"]["content"] == "角色权限分配成功"
+    assert card["body"]["elements"][0]["element_id"] == "role_assign_permission_success_tip"
+    assert card["body"]["elements"][1]["element_id"] == "role_assign_permission_detail"
+    assert "角色 **员工** （staff）权限已成功分配" in content
+    assert "角色ID：2" in content
+    assert "分配后权限：查询角色（role:list）、创建角色（role:create）" in content
+    assert "变更：新增：创建角色（role:create）" in content
+    assert "操作人：admin" in content
+    assert "request_id：req-assign-permission" in content
+    assert notification_management.sender_user_ids[0] == 1
+    assert notification_management.request_ids[0] == "req-assign-permission"
+
+
+def test_role_assign_permission_api_sends_notification_when_cleared() -> None:
+    settings, mysql_pool, redis_client, token = run_async(
+        prepare_api_context(
+            ["role:assign_permission"],
+            roles=[build_role(role_id=2, role_code="staff", role_name="员工")],
+            permissions=[build_permission(10, "role:list", "查询角色")],
+        )
+    )
+    mysql_pool.role_permissions_by_role[2] = [10]
+    settings.role_notify_enabled = True
+    settings.role_notify_receive_id = "oc_role"
+    notification_management = StubNotificationManagement()
+    app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
+    app.dependency_overrides[get_redis_client] = lambda: redis_client
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
+    try:
+        with TestClient(app) as client:
+            response = client.put(
+                "/v1/roles/2/permissions",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"permission_ids": []},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert response.json()["data"] == {"role_id": 2, "permission_ids": []}
+    content = notification_management.card_payloads[0].card["body"]["elements"][1]["content"]
+    assert notification_management.card_payloads[0].content_summary == (
+        "角色 staff 权限分配成功，移除：查询角色（role:list）"
+    )
+    assert "分配后权限：-" in content
+    assert "变更：移除：查询角色（role:list）" in content
+
+
+def test_role_assign_permission_api_skips_notification_without_receive_id() -> None:
+    settings, mysql_pool, redis_client, token = run_async(
+        prepare_api_context(
+            ["role:assign_permission"],
+            roles=[build_role(role_id=2, role_code="staff")],
+            permissions=[build_permission(10, "role:list")],
+        )
+    )
+    settings.role_notify_enabled = True
+    settings.role_notify_receive_id = ""
+    notification_management = StubNotificationManagement()
+    app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
+    app.dependency_overrides[get_redis_client] = lambda: redis_client
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
+    try:
+        with TestClient(app) as client:
+            response = client.put(
+                "/v1/roles/2/permissions",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"permission_ids": [10]},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert notification_management.card_payloads == []
+
+
+def test_role_assign_permission_api_ignores_notification_failure() -> None:
+    settings, mysql_pool, redis_client, token = run_async(
+        prepare_api_context(
+            ["role:assign_permission"],
+            roles=[build_role(role_id=2, role_code="staff")],
+            permissions=[build_permission(10, "role:list")],
+        )
+    )
+    settings.role_notify_enabled = True
+    settings.role_notify_receive_id = "oc_role"
+    notification_management = StubNotificationManagement(
+        error=FeishuException(msg="send failed")
+    )
+    app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
+    app.dependency_overrides[get_redis_client] = lambda: redis_client
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
+    try:
+        with TestClient(app) as client:
+            response = client.put(
+                "/v1/roles/2/permissions",
+                headers={"Authorization": f"Bearer {token}", "X-Request-ID": "req-assign-fail"},
+                json={"permission_ids": [10]},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert response.json()["data"] == {"role_id": 2, "permission_ids": [10]}
+    assert notification_management.card_payloads[0].receive_id == "oc_role"
+
+
+def test_role_assign_permission_api_does_not_notify_missing_role() -> None:
+    settings, mysql_pool, redis_client, token = run_async(
+        prepare_api_context(
+            ["role:assign_permission"],
+            roles=[],
+            permissions=[build_permission(10, "role:list")],
+        )
+    )
+    settings.role_notify_enabled = True
+    settings.role_notify_receive_id = "oc_role"
+    notification_management = StubNotificationManagement()
+    app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
+    app.dependency_overrides[get_redis_client] = lambda: redis_client
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
+    try:
+        with TestClient(app) as client:
+            response = client.put(
+                "/v1/roles/999/permissions",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"permission_ids": [10]},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 40400
+    assert response.json()["msg"] == "角色不存在"
+    assert notification_management.card_payloads == []
+
+
+def test_role_assign_permission_api_does_not_notify_invalid_permission() -> None:
+    settings, mysql_pool, redis_client, token = run_async(
+        prepare_api_context(
+            ["role:assign_permission"],
+            roles=[build_role(role_id=2, role_code="staff")],
+            permissions=[build_permission(10, "role:list", status=0)],
+        )
+    )
+    settings.role_notify_enabled = True
+    settings.role_notify_receive_id = "oc_role"
+    notification_management = StubNotificationManagement()
+    app.dependency_overrides[get_mysql_pool] = lambda: mysql_pool
+    app.dependency_overrides[get_redis_client] = lambda: redis_client
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_notification_management] = lambda: notification_management
+    try:
+        with TestClient(app) as client:
+            response = client.put(
+                "/v1/roles/2/permissions",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"permission_ids": [10]},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 40000
+    assert response.json()["msg"] == "权限不存在或已禁用"
+    assert notification_management.card_payloads == []
 
 
 async def prepare_api_context(
