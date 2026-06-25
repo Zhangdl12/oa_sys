@@ -59,8 +59,7 @@ async def send_hourly_feishu_card_notify_async(
         )
         return {"status": "sent", "request_id": request_id, "result": result}
 
-    result = await _send_with_resources(current_settings, payload, request_id)
-    return {"status": "sent", "request_id": request_id, "result": result}
+    return await _send_with_resources(current_settings, payload, request_id)
 
 
 async def _send_with_resources(
@@ -82,11 +81,12 @@ async def _send_with_resources(
             mysql_pool=mysql_pool,
             settings=settings,
         )
-        return await feishu_management.send_card_notify(
+        result = await feishu_management.send_card_notify(
             payload,
             sender_user_id=None,
             request_id=request_id,
         )
+        return {"status": "sent", "request_id": request_id, "result": result}
     finally:
         await close_mysql_pool(mysql_pool)
         await close_redis_client(redis_client)

@@ -26,7 +26,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "oa_admin"
+    app_name: str = "oa_admin_ALT"
     app_env: str = "local"
     debug: bool = Field(default=True, validation_alias="APP_DEBUG") 
     api_prefix: str = "/v1"
@@ -57,6 +57,7 @@ class Settings(BaseSettings):
 
     celery_broker_url: str = "redis://127.0.0.1:6379/1"
     celery_result_backend: str = "redis://127.0.0.1:6379/2"
+    schedule_trigger_token: str = ""
 
     feishu_enabled: bool = False
     feishu_base_url: str = "https://open.feishu.cn"
@@ -74,7 +75,9 @@ class Settings(BaseSettings):
     role_notify_receive_id_type: Literal["open_id", "chat_id", "user_id"] = "user_id"
     role_notify_receive_id: str = ""
 
-    jwt_secret_key: str = "LP4rKBCuD8aC9u6dhd2yoKE2cV5mFQ2-21MpjyBEKGmUFZa7vPGJFJcA13zrCJVqNIyCVuLYxO_ny75-3RW41g"
+    jwt_secret_key: str = (
+        "LP4rKBCuD8aC9u6dhd2yoKE2cV5mFQ2-21MpjyBEKGmUFZa7vPGJFJcA13zrCJVqNIyCVuLYxO_ny75-3RW41g"
+    )
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 480
 

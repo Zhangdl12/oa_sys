@@ -101,6 +101,38 @@ def test_celery_app_registers_hourly_feishu_task() -> None:
     assert TASK_NAME in celery_app.tasks
 
 
+def test_hourly_feishu_task_sends_again_in_same_hour() -> None:
+    manager = StubFeishuManagement()
+    now = datetime(2026, 6, 24, 10, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    settings = Settings(
+        feishu_hourly_notify_enabled=True,
+        feishu_hourly_notify_user_id="user_xxx",
+    )
+
+    first = run_async(
+        send_hourly_feishu_card_notify_async(
+            settings=settings,
+            feishu_management=manager,
+            now=now,
+        )
+    )
+    second = run_async(
+        send_hourly_feishu_card_notify_async(
+            settings=settings,
+            feishu_management=manager,
+            now=now,
+        )
+    )
+
+    assert first["status"] == "sent"
+    assert second["status"] == "sent"
+    assert len(manager.card_payloads) == 2
+    assert manager.request_ids == [
+        "celery-hourly-feishu-2026062410",
+        "celery-hourly-feishu-2026062410",
+    ]
+
+
 def test_celery_beat_schedules_hourly_feishu_task() -> None:
     entry = celery_app.conf.beat_schedule["send-hourly-feishu-card-notify"]
 
